@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "No token",
+      "method": "POST",
+      "path": "/",
+      "body": {"content_type": "image/jpeg", "data": ""},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    }
+  ]
+}

@@ -22,6 +22,14 @@
       "body": {"action": "login", "phone": "+70000000000"},
       "expectedStatus": 403,
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "Check username - too short",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "check_username", "username": "ab"},
+      "expectedStatus": 400,
+      "bodyMatcher": "partial"
     }
   ]
 }

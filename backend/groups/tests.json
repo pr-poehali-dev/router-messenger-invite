@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "No token",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "list"},
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    }
+  ]
+}

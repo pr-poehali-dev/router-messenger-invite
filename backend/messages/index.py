@@ -76,7 +76,8 @@ def handler(event: dict, context) -> dict:
                     u.name, u.display_id, u.hide_last_seen, u.last_seen_visibility, u.last_seen,
                     (SELECT text FROM {SCHEMA}.messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_text,
                     (SELECT created_at FROM {SCHEMA}.messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_time,
-                    (SELECT COUNT(*) FROM {SCHEMA}.messages m WHERE m.conversation_id = c.id AND m.sender_id != {me_id} AND m.is_read = FALSE) AS unread
+                    (SELECT COUNT(*) FROM {SCHEMA}.messages m WHERE m.conversation_id = c.id AND m.sender_id != {me_id} AND m.is_read = FALSE) AS unread,
+                    u.username, u.avatar_url
                 FROM {SCHEMA}.conversations c
                 JOIN {SCHEMA}.users u ON u.id = CASE WHEN c.user_a = {me_id} THEN c.user_b ELSE c.user_a END
                 WHERE c.user_a = {me_id} OR c.user_b = {me_id}
@@ -96,6 +97,8 @@ def handler(event: dict, context) -> dict:
                     "last_text": r[7] or "",
                     "last_time": r[8].isoformat() if r[8] else None,
                     "unread": r[9],
+                    "username": r[10],
+                    "avatar_url": r[11],
                 })
             return resp(200, {"chats": chats})
 
@@ -154,15 +157,17 @@ def handler(event: dict, context) -> dict:
 
             after_clause = f"AND m.id > {after_id}" if after_id else ""
             cur.execute(f"""
-                SELECT m.id, m.sender_id, m.text, m.is_read, m.created_at
+                SELECT m.id, m.sender_id, m.text, m.is_read, m.created_at,
+                       m.media_url, m.media_type
                 FROM {SCHEMA}.messages m
                 WHERE m.conversation_id = {conv_id} {after_clause}
                 ORDER BY m.created_at ASC
                 LIMIT 100
             """)
             msgs = [{
-                "id": r[0], "sender_id": r[1], "text": r[2],
+                "id": r[0], "sender_id": r[1], "text": r[2] or "",
                 "is_read": r[3], "created_at": r[4].isoformat(),
+                "media_url": r[5], "media_type": r[6],
                 "own": r[1] == me_id,
             } for r in cur.fetchall()]
             return resp(200, {"messages": msgs})
@@ -171,8 +176,10 @@ def handler(event: dict, context) -> dict:
         if action == "send":
             conv_id = int(body.get("conv_id") or 0)
             text = str(body.get("text") or "").strip().replace("'", "''")
-            if not conv_id or not text:
-                return resp(400, {"error": "Укажите conv_id и text"})
+            media_url = str(body.get("media_url") or "").replace("'", "''")
+            media_type = str(body.get("media_type") or "").replace("'", "")
+            if not conv_id or (not text and not media_url):
+                return resp(400, {"error": "Укажите conv_id и текст или медиа"})
             if len(text) > 4000:
                 return resp(400, {"error": "Сообщение слишком длинное"})
 
@@ -183,14 +190,19 @@ def handler(event: dict, context) -> dict:
             if not cur.fetchone():
                 return resp(403, {"error": "Нет доступа к диалогу"})
 
+            text_val = f"'{text}'" if text else "NULL"
+            media_url_val = f"'{media_url}'" if media_url else "NULL"
+            media_type_val = f"'{media_type}'" if media_type else "NULL"
             cur.execute(f"""
-                INSERT INTO {SCHEMA}.messages (conversation_id, sender_id, text)
-                VALUES ({conv_id}, {me_id}, '{text}') RETURNING id, created_at
+                INSERT INTO {SCHEMA}.messages (conversation_id, sender_id, text, media_url, media_type)
+                VALUES ({conv_id}, {me_id}, {text_val}, {media_url_val}, {media_type_val})
+                RETURNING id, created_at
             """)
             msg_row = cur.fetchone()
             conn.commit()
             return resp(200, {"message": {
                 "id": msg_row[0], "sender_id": me_id, "text": text.replace("''", "'"),
+                "media_url": media_url or None, "media_type": media_type or None,
                 "is_read": False, "created_at": msg_row[1].isoformat(), "own": True,
             }})
 
