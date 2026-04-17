@@ -4,6 +4,7 @@ import func2url from "../backend/func2url.json";
 
 const AUTH_URL = func2url.auth;
 const INVITES_URL = func2url.invites;
+const MSG_URL = func2url.messages;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -16,36 +17,23 @@ interface User {
   display_id?: string; hide_phone?: boolean; hide_last_seen?: boolean;
   last_seen_visibility?: string; phone_visibility?: string; last_seen?: string;
 }
+interface RealChat {
+  conv_id: number; other_id: number; name: string; display_id: string;
+  last_seen_label: string; online: boolean; last_text: string;
+  last_time: string | null; unread: number;
+}
+interface RealMessage {
+  id: number; sender_id: number; text: string; is_read: boolean;
+  created_at: string; own: boolean;
+}
+interface FoundUser {
+  id: number; name: string; display_id: string; about?: string;
+  last_seen_label: string; online: boolean;
+}
 interface InviteCode {
   code: string; is_used: boolean; created_at: string;
   used_at?: string; used_by?: string; used_by_display_id?: string;
 }
-interface Message { id: number; text: string; time: string; own: boolean; }
-interface Chat { id: number; name: string; avatar: string; lastMessage: string; time: string; unread: number; online: boolean; }
-interface Contact { id: number; name: string; avatar: string; status: string; online: boolean; }
-
-// ─── Mock data ────────────────────────────────────────────────────────────────
-
-const MOCK_CHATS: Chat[] = [
-  { id: 1, name: "Алексей Громов", avatar: "АГ", lastMessage: "Договорились на завтра", time: "14:32", unread: 2, online: true },
-  { id: 2, name: "Мария Кузнецова", avatar: "МК", lastMessage: "Спасибо за документы!", time: "13:15", unread: 0, online: true },
-  { id: 3, name: "Рабочая группа", avatar: "РГ", lastMessage: "Встреча в пятницу в 10:00", time: "11:48", unread: 5, online: false },
-  { id: 4, name: "Дмитрий Волков", avatar: "ДВ", lastMessage: "Посмотрю и отвечу", time: "Вчера", unread: 0, online: false },
-];
-const MOCK_CONTACTS: Contact[] = [
-  { id: 1, name: "Алексей Громов", avatar: "АГ", status: "В сети", online: true },
-  { id: 2, name: "Мария Кузнецова", avatar: "МК", status: "В сети", online: true },
-  { id: 3, name: "Ольга Смирнова", avatar: "ОС", status: "В сети", online: true },
-  { id: 4, name: "Дмитрий Волков", avatar: "ДВ", status: "Был недавно", online: false },
-  { id: 5, name: "Никита Орлов", avatar: "НО", status: "Недоступен", online: false },
-];
-const MOCK_MSGS: Message[] = [
-  { id: 1, text: "Привет! Как продвигается работа?", time: "14:10", own: false },
-  { id: 2, text: "Всё идёт по плану.", time: "14:12", own: true },
-  { id: 3, text: "Нужно согласовать детали по интеграции", time: "14:20", own: false },
-  { id: 4, text: "Давай обсудим в 15:00?", time: "14:25", own: true },
-  { id: 5, text: "Договорились на завтра", time: "14:32", own: false },
-];
 
 // ─── Atoms ────────────────────────────────────────────────────────────────────
 
@@ -54,7 +42,9 @@ function Avatar({ initials, size = "md", online }: { initials: string; size?: "s
   return (
     <div className="relative shrink-0">
       <div className={`${s} rounded-full bg-gradient-to-br from-primary/30 to-primary/10 border border-primary/20 flex items-center justify-center font-semibold text-primary`}>{initials}</div>
-      {online !== undefined && <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-background ${online ? "bg-green-400" : "bg-muted-foreground/30"}`} />}
+      {online !== undefined && (
+        <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-background ${online ? "bg-green-400" : "bg-muted-foreground/30"}`} />
+      )}
     </div>
   );
 }
@@ -92,7 +82,10 @@ function Field({ label, ...props }: { label: string } & React.InputHTMLAttribute
   );
 }
 
-function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
+function SelectField({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
   return (
     <div>
       <label className="text-xs text-muted-foreground mb-1.5 block">{label}</label>
@@ -113,6 +106,20 @@ function Card({ icon, title, children }: { icon: string; title: string; children
       {children}
     </div>
   );
+}
+
+function initials(name: string) {
+  return (name || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function fmtTime(iso: string | null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  const diff = (now.getTime() - d.getTime()) / 1000;
+  if (diff < 86400) return d.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+  if (diff < 172800) return "Вчера";
+  return d.toLocaleDateString("ru", { day: "2-digit", month: "2-digit" });
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -158,7 +165,6 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
     const { ok, data } = await post({ action: "verify_code", phone: phone.trim(), code: smsCode.trim() });
     setLoading(false);
     if (!ok) { setError(data.error || "Неверный код"); return; }
-
     if (isLogin) {
       const { ok: lok, data: ld } = await post({ action: "login", phone: phone.trim() });
       if (!lok) {
@@ -183,14 +189,10 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
 
   const back = () => {
     setError("");
-    const prev: Record<AuthStep, AuthStep> = {
-      welcome: "welcome", phone: "welcome", code: "phone",
-      register_invite: "code", register_name: "register_invite",
-    };
+    const prev: Record<AuthStep, AuthStep> = { welcome: "welcome", phone: "welcome", code: "phone", register_invite: "code", register_name: "register_invite" };
     setStep(prev[step]);
   };
 
-  // Welcome
   if (step === "welcome") {
     return (
       <div className="flex flex-col items-center justify-center h-full px-6 animate-fade-in">
@@ -216,7 +218,6 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
         <Icon name="ArrowLeft" size={15} />Назад
       </button>
       <div className="flex-1 flex flex-col justify-center max-w-xs mx-auto w-full animate-fade-in">
-
         {step === "phone" && (
           <>
             <h2 className="text-xl font-bold mb-1">{isLogin ? "Войти" : "Регистрация"}</h2>
@@ -228,7 +229,6 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
             </div>
           </>
         )}
-
         {step === "code" && (
           <>
             <h2 className="text-xl font-bold mb-1">Введите код</h2>
@@ -241,22 +241,14 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
             <div className="space-y-4">
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Код из SMS</label>
-                <input
-                  className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-2xl font-mono tracking-[0.5em] text-center placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/50 transition-all"
-                  placeholder="000000" maxLength={6} value={smsCode}
-                  onChange={e => setSmsCode(e.target.value.replace(/\D/g, ""))}
-                  onKeyDown={e => e.key === "Enter" && verifyCode()} autoFocus
-                />
+                <input className="w-full bg-secondary border border-border rounded-xl px-4 py-3 text-2xl font-mono tracking-[0.5em] text-center placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/50 transition-all" placeholder="000000" maxLength={6} value={smsCode} onChange={e => setSmsCode(e.target.value.replace(/\D/g, ""))} onKeyDown={e => e.key === "Enter" && verifyCode()} autoFocus />
               </div>
               {error && <p className="text-xs text-destructive">{error}</p>}
               <button onClick={verifyCode} disabled={loading || smsCode.length < 6} className="w-full bg-primary text-primary-foreground font-medium py-3 rounded-xl hover:bg-primary/80 transition-colors disabled:opacity-50">{loading ? "Проверяем..." : "Подтвердить"}</button>
-              <button onClick={() => { setSmsCode(""); setDevCode(""); sendCode(); }} disabled={countdown > 0} className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 py-1">
-                {countdown > 0 ? `Повторить через ${countdown}с` : "Отправить повторно"}
-              </button>
+              <button onClick={() => { setSmsCode(""); setDevCode(""); sendCode(); }} disabled={countdown > 0} className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 py-1">{countdown > 0 ? `Повторить через ${countdown}с` : "Отправить повторно"}</button>
             </div>
           </>
         )}
-
         {step === "register_invite" && (
           <>
             <h2 className="text-xl font-bold mb-1">Код приглашения</h2>
@@ -268,7 +260,6 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
             </div>
           </>
         )}
-
         {step === "register_name" && (
           <>
             <h2 className="text-xl font-bold mb-1">Ваше имя</h2>
@@ -285,20 +276,56 @@ function AuthFlow({ onSuccess }: { onSuccess: (user: User, token: string) => voi
   );
 }
 
-// ─── Chat view (full screen) ──────────────────────────────────────────────────
+// ─── Chat view ────────────────────────────────────────────────────────────────
 
-function ChatView({ chat, onBack }: { chat: Chat; onBack: () => void }) {
-  const [messages, setMessages] = useState<Message[]>(MOCK_MSGS);
+function ChatView({ chat, token, onBack }: { chat: RealChat; token: string; onBack: () => void }) {
+  const [messages, setMessages] = useState<RealMessage[]>([]);
   const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lastIdRef = useRef(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const msgPost = useCallback(async (body: object) => {
+    const res = await fetch(MSG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  }, [token]);
+
+  const loadMessages = useCallback(async (afterId = 0) => {
+    const data = await msgPost({ action: "get_messages", conv_id: chat.conv_id, after_id: afterId });
+    if (data.messages?.length) {
+      setMessages(prev => {
+        const ids = new Set(prev.map(m => m.id));
+        const newMsgs = data.messages.filter((m: RealMessage) => !ids.has(m.id));
+        return [...prev, ...newMsgs];
+      });
+      lastIdRef.current = data.messages[data.messages.length - 1].id;
+    }
+  }, [chat.conv_id, msgPost]);
+
+  useEffect(() => {
+    loadMessages(0);
+    msgPost({ action: "mark_read", conv_id: chat.conv_id });
+    pollRef.current = setInterval(() => loadMessages(lastIdRef.current), 3000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [chat.conv_id, loadMessages, msgPost]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  const send = () => {
-    if (!text.trim()) return;
-    const now = new Date();
-    setMessages(p => [...p, { id: p.length + 1, text, time: now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" }), own: true }]);
-    setText("");
+  const send = async () => {
+    const t = text.trim();
+    if (!t || sending) return;
+    setSending(true); setText("");
+    const data = await msgPost({ action: "send", conv_id: chat.conv_id, text: t });
+    if (data.message) {
+      setMessages(prev => [...prev, data.message]);
+      lastIdRef.current = data.message.id;
+    }
+    setSending(false);
   };
 
   return (
@@ -307,19 +334,17 @@ function ChatView({ chat, onBack }: { chat: Chat; onBack: () => void }) {
         <button onClick={onBack} className="p-1.5 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground shrink-0">
           <Icon name="ArrowLeft" size={18} />
         </button>
-        <Avatar initials={chat.avatar} online={chat.online} />
+        <Avatar initials={initials(chat.name)} online={chat.online} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm truncate">{chat.name}</span>
             <E2EBadge />
           </div>
-          <span className="text-xs text-muted-foreground">{chat.online ? "В сети" : "Был недавно"}</span>
+          <span className="text-xs text-muted-foreground">{chat.last_seen_label}</span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button className="p-2 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground"><Icon name="Phone" size={15} /></button>
-          <button className="p-2 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground"><Icon name="Video" size={15} /></button>
-          <button className="p-2 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground"><Icon name="MoreVertical" size={15} /></button>
-        </div>
+        <button className="p-2 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground shrink-0">
+          <Icon name="MoreVertical" size={15} />
+        </button>
       </div>
 
       <div className="flex justify-center py-2 shrink-0">
@@ -329,12 +354,23 @@ function ChatView({ chat, onBack }: { chat: Chat; onBack: () => void }) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-2 flex flex-col gap-2">
+        {messages.length === 0 && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-3">
+                <Icon name="MessageCircle" size={20} className="text-primary/50" />
+              </div>
+              <p className="text-sm text-muted-foreground">Напишите первое сообщение</p>
+            </div>
+          </div>
+        )}
         {messages.map(msg => (
           <div key={msg.id} className={`flex ${msg.own ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-xs lg:max-w-md px-3.5 py-2.5 rounded-2xl text-sm ${msg.own ? "bg-primary text-primary-foreground rounded-br-sm" : "bg-card border border-border rounded-bl-sm"}`}>
-              <p className="leading-relaxed">{msg.text}</p>
+            <div className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl text-sm ${msg.own ? "bg-primary text-primary-foreground rounded-br-sm" : "bg-card border border-border rounded-bl-sm"}`}>
+              <p className="leading-relaxed break-words">{msg.text}</p>
               <span className={`text-[10px] mt-1 block text-right ${msg.own ? "text-primary-foreground/60" : "text-muted-foreground"}`}>
-                {msg.time}{msg.own && <Icon name="CheckCheck" size={10} className="inline ml-1" />}
+                {fmtTime(msg.created_at)}
+                {msg.own && <Icon name={msg.is_read ? "CheckCheck" : "Check"} size={10} className="inline ml-1" />}
               </span>
             </div>
           </div>
@@ -345,8 +381,14 @@ function ChatView({ chat, onBack }: { chat: Chat; onBack: () => void }) {
       <div className="px-4 py-3 border-t border-border shrink-0">
         <div className="flex items-center gap-2 bg-secondary rounded-xl px-3 py-2">
           <button className="text-muted-foreground hover:text-foreground transition-colors"><Icon name="Paperclip" size={15} /></button>
-          <input className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" placeholder="Сообщение..." value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === "Enter" && send()} />
-          <button onClick={send} className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center hover:bg-primary/80 active:scale-95 transition-all">
+          <input
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            placeholder="Сообщение..."
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
+          />
+          <button onClick={send} disabled={!text.trim() || sending} className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center hover:bg-primary/80 active:scale-95 transition-all disabled:opacity-50">
             <Icon name="Send" size={13} className="text-primary-foreground" />
           </button>
         </div>
@@ -355,37 +397,188 @@ function ChatView({ chat, onBack }: { chat: Chat; onBack: () => void }) {
   );
 }
 
-// ─── Chats list ───────────────────────────────────────────────────────────────
+// ─── New chat search ──────────────────────────────────────────────────────────
 
-function ChatsPage() {
-  const [openChat, setOpenChat] = useState<Chat | null>(null);
-  if (openChat) return <ChatView chat={openChat} onBack={() => setOpenChat(null)} />;
+function NewChatSearch({ token, onOpenChat, onClose }: {
+  token: string;
+  onOpenChat: (chat: RealChat) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState<FoundUser | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [opening, setOpening] = useState(false);
+
+  const search = async () => {
+    if (!query.trim()) return;
+    setLoading(true); setError(""); setResult(null);
+    const res = await fetch(MSG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token },
+      body: JSON.stringify({ action: "find_user", display_id: query.trim() }),
+    });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) { setError(data.error || "Не найдено"); return; }
+    setResult(data.user);
+  };
+
+  const openChat = async () => {
+    if (!result) return;
+    setOpening(true);
+    const res = await fetch(MSG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token },
+      body: JSON.stringify({ action: "open_chat", other_id: result.id }),
+    });
+    const data = await res.json();
+    setOpening(false);
+    if (res.ok) {
+      onOpenChat({
+        conv_id: data.conv_id,
+        other_id: result.id,
+        name: result.name,
+        display_id: result.display_id,
+        last_seen_label: result.last_seen_label,
+        online: result.online,
+        last_text: "",
+        last_time: null,
+        unread: 0,
+      });
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full animate-fade-in">
+      <div className="flex items-center gap-3 px-4 h-14 border-b border-border shrink-0">
+        <button onClick={onClose} className="p-1.5 hover:bg-accent rounded-lg transition-colors text-muted-foreground hover:text-foreground">
+          <Icon name="ArrowLeft" size={18} />
+        </button>
+        <span className="font-semibold text-sm">Новый чат</span>
+      </div>
+      <div className="p-5 space-y-4">
+        <p className="text-sm text-muted-foreground">Введите ID пользователя, чтобы начать диалог</p>
+        <div className="flex gap-2">
+          <input
+            className="flex-1 bg-secondary border border-border rounded-xl px-4 py-3 text-sm font-mono placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/50 transition-all uppercase"
+            placeholder="SF-XXXXXXXX"
+            value={query}
+            onChange={e => setQuery(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === "Enter" && search()}
+            autoFocus
+          />
+          <button onClick={search} disabled={loading || !query.trim()} className="px-4 bg-primary text-primary-foreground rounded-xl hover:bg-primary/80 transition-colors disabled:opacity-50 shrink-0">
+            {loading ? <Icon name="Loader2" size={15} className="animate-spin" /> : <Icon name="Search" size={15} />}
+          </button>
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        {result && (
+          <div className="p-4 bg-card border border-border rounded-xl space-y-3">
+            <div className="flex items-center gap-3">
+              <Avatar initials={initials(result.name)} online={result.online} size="md" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm">{result.name}</p>
+                <p className="text-xs text-muted-foreground font-mono">{result.display_id}</p>
+              </div>
+              <span className="text-xs text-muted-foreground">{result.last_seen_label}</span>
+            </div>
+            {result.about && <p className="text-xs text-muted-foreground">{result.about}</p>}
+            <button onClick={openChat} disabled={opening} className="w-full bg-primary text-primary-foreground text-sm font-medium py-2.5 rounded-xl hover:bg-primary/80 transition-colors disabled:opacity-50">
+              {opening ? "Открываем..." : "Написать"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Chats page ───────────────────────────────────────────────────────────────
+
+function ChatsPage({ token }: { token: string }) {
+  const [chats, setChats] = useState<RealChat[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openChat, setOpenChat] = useState<RealChat | null>(null);
+  const [newChat, setNewChat] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const loadChats = useCallback(async () => {
+    const res = await fetch(MSG_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Token": token },
+      body: JSON.stringify({ action: "list_chats" }),
+    });
+    const data = await res.json();
+    if (res.ok) setChats(data.chats || []);
+    setLoading(false);
+  }, [token]);
+
+  useEffect(() => {
+    loadChats();
+    pollRef.current = setInterval(loadChats, 5000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [loadChats]);
+
+  if (openChat) return <ChatView chat={openChat} token={token} onBack={() => { setOpenChat(null); loadChats(); }} />;
+  if (newChat) return (
+    <NewChatSearch
+      token={token}
+      onOpenChat={chat => { setNewChat(false); setOpenChat(chat); }}
+      onClose={() => setNewChat(false)}
+    />
+  );
+
+  const totalUnread = chats.reduce((a, c) => a + c.unread, 0);
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b border-border shrink-0">
-        <div className="relative">
+      <div className="p-3 border-b border-border shrink-0 flex items-center gap-2">
+        <div className="relative flex-1">
           <Icon name="Search" size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input className="w-full bg-secondary rounded-lg pl-8 pr-3 py-2 text-sm placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/40" placeholder="Поиск..." />
         </div>
+        <button onClick={() => setNewChat(true)} className="p-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/80 transition-colors shrink-0" title="Новый чат">
+          <Icon name="Plus" size={15} />
+        </button>
       </div>
+
       <div className="flex-1 overflow-y-auto">
-        {MOCK_CHATS.map(chat => (
-          <button key={chat.id} onClick={() => setOpenChat(chat)} className="w-full flex items-center gap-3 px-3 py-3 hover:bg-accent transition-colors text-left border-b border-border/40">
-            <Avatar initials={chat.avatar} online={chat.online} />
+        {loading && (
+          <div className="flex items-center justify-center h-32">
+            <Icon name="Loader2" size={20} className="animate-spin text-muted-foreground" />
+          </div>
+        )}
+        {!loading && chats.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-48 gap-3 px-6 text-center">
+            <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+              <Icon name="MessageSquare" size={20} className="text-primary/50" />
+            </div>
+            <p className="text-sm text-muted-foreground">Нет диалогов. Нажмите <span className="text-primary">+</span> чтобы найти пользователя по его ID</p>
+          </div>
+        )}
+        {chats.map(chat => (
+          <button key={chat.conv_id} onClick={() => setOpenChat(chat)} className="w-full flex items-center gap-3 px-3 py-3 hover:bg-accent transition-colors text-left border-b border-border/40">
+            <Avatar initials={initials(chat.name)} online={chat.online} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium truncate">{chat.name}</span>
-                <span className="text-[11px] text-muted-foreground shrink-0 ml-2">{chat.time}</span>
+                <span className="text-[11px] text-muted-foreground shrink-0 ml-2">{fmtTime(chat.last_time)}</span>
               </div>
               <div className="flex items-center justify-between mt-0.5">
-                <span className="text-xs text-muted-foreground truncate">{chat.lastMessage}</span>
+                <span className="text-xs text-muted-foreground truncate">{chat.last_text || "Нет сообщений"}</span>
                 {chat.unread > 0 && <span className="ml-2 bg-primary text-primary-foreground text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 shrink-0">{chat.unread}</span>}
               </div>
             </div>
           </button>
         ))}
       </div>
+
+      {totalUnread > 0 && (
+        <div className="px-4 py-2 border-t border-border bg-primary/5 text-center">
+          <span className="text-xs text-primary font-medium">{totalUnread} непрочитанных сообщений</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -394,38 +587,12 @@ function ChatsPage() {
 
 function ContactsPage() {
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-4 border-b border-border flex items-center gap-3">
-        <div className="relative flex-1">
-          <Icon name="Search" size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <input className="w-full bg-secondary rounded-lg pl-8 pr-3 py-2 text-sm placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/40" placeholder="Поиск контактов..." />
-        </div>
-        <button className="flex items-center gap-1.5 bg-primary text-primary-foreground text-sm px-3 py-2 rounded-lg hover:bg-primary/80 transition-colors shrink-0">
-          <Icon name="UserPlus" size={13} />Добавить
-        </button>
+    <div className="flex flex-col items-center justify-center h-full px-6 text-center gap-3">
+      <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
+        <Icon name="Users" size={24} className="text-primary/50" />
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        {[
-          { label: "В сети", items: MOCK_CONTACTS.filter(c => c.online) },
-          { label: "Недавно", items: MOCK_CONTACTS.filter(c => !c.online) },
-        ].map(g => (
-          <div key={g.label}>
-            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">{g.label} · {g.items.length}</p>
-            <div className="space-y-0.5">
-              {g.items.map(c => (
-                <div key={c.id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-accent transition-colors cursor-pointer">
-                  <Avatar initials={c.avatar} online={c.online} />
-                  <div className="flex-1"><p className="text-sm font-medium">{c.name}</p><p className="text-xs text-muted-foreground">{c.status}</p></div>
-                  <div className="flex gap-1">
-                    <button className="p-1.5 hover:bg-card rounded-lg transition-colors text-muted-foreground hover:text-foreground"><Icon name="MessageCircle" size={14} /></button>
-                    <button className="p-1.5 hover:bg-card rounded-lg transition-colors text-muted-foreground hover:text-foreground"><Icon name="Phone" size={14} /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+      <p className="text-sm font-medium">Контакты из чатов</p>
+      <p className="text-xs text-muted-foreground max-w-xs">Люди, с которыми вы переписываетесь, появятся здесь автоматически</p>
     </div>
   );
 }
@@ -452,8 +619,7 @@ function InvitesTab({ token }: { token: string }) {
   const generate = async () => {
     setGenerating(true);
     await fetch(INVITES_URL, { method: "POST", headers: { "X-Session-Token": token } });
-    await load();
-    setGenerating(false);
+    await load(); setGenerating(false);
   };
 
   const copy = (code: string) => {
@@ -471,10 +637,7 @@ function InvitesTab({ token }: { token: string }) {
           <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
             <Icon name="Users" size={18} className="text-primary" />
           </div>
-          <div>
-            <p className="text-sm font-medium">Приглашено</p>
-            <p className="text-xs text-muted-foreground">Вступили по вашим кодам</p>
-          </div>
+          <div><p className="text-sm font-medium">Приглашено</p><p className="text-xs text-muted-foreground">Вступили по вашим кодам</p></div>
         </div>
         <span className="text-2xl font-bold text-primary">{invitedCount}</span>
       </div>
@@ -518,7 +681,7 @@ function InvitesTab({ token }: { token: string }) {
   );
 }
 
-// ─── Privacy tab ─────────────────────────────────────────────────────────────
+// ─── Privacy tab ──────────────────────────────────────────────────────────────
 
 function PrivacyTab({ user, token, onUpdate }: { user: User; token: string; onUpdate: (u: Partial<User>) => void }) {
   const [saving, setSaving] = useState(false);
@@ -550,26 +713,16 @@ function PrivacyTab({ user, token, onUpdate }: { user: User; token: string; onUp
     <div className="space-y-3">
       <Card icon="Phone" title="Номер телефона">
         <div className="divide-y divide-border">
-          <div className="px-4 py-3.5">
-            <Toggle label="Скрыть номер телефона" desc="Другие пользователи не увидят ваш номер" value={local.hide_phone} onChange={() => save({ hide_phone: !local.hide_phone })} />
-          </div>
-          <div className="px-4 py-3.5">
-            <SelectField label="Кто видит ваш номер" value={local.phone_visibility} onChange={v => save({ phone_visibility: v })} options={visOpts} />
-          </div>
+          <div className="px-4 py-3.5"><Toggle label="Скрыть номер телефона" desc="Другие пользователи не увидят ваш номер" value={local.hide_phone} onChange={() => save({ hide_phone: !local.hide_phone })} /></div>
+          <div className="px-4 py-3.5"><SelectField label="Кто видит ваш номер" value={local.phone_visibility} onChange={v => save({ phone_visibility: v })} options={visOpts} /></div>
         </div>
       </Card>
-
       <Card icon="Clock" title="Время в сети">
         <div className="divide-y divide-border">
-          <div className="px-4 py-3.5">
-            <Toggle label="Скрыть время последнего визита" desc="Вместо времени другие увидят «Был недавно»" value={local.hide_last_seen} onChange={() => save({ hide_last_seen: !local.hide_last_seen })} />
-          </div>
-          <div className="px-4 py-3.5">
-            <SelectField label="Кто видит время вашего визита" value={local.last_seen_visibility} onChange={v => save({ last_seen_visibility: v })} options={visOpts} />
-          </div>
+          <div className="px-4 py-3.5"><Toggle label="Скрыть время последнего визита" desc="Вместо времени другие увидят «Был недавно»" value={local.hide_last_seen} onChange={() => save({ hide_last_seen: !local.hide_last_seen })} /></div>
+          <div className="px-4 py-3.5"><SelectField label="Кто видит время вашего визита" value={local.last_seen_visibility} onChange={v => save({ last_seen_visibility: v })} options={visOpts} /></div>
         </div>
       </Card>
-
       {saving && <p className="text-xs text-muted-foreground text-center animate-pulse">Сохраняем...</p>}
     </div>
   );
@@ -604,7 +757,7 @@ function SettingsPage({ user, token, onUpdate }: { user: User; token: string; on
             <Card icon="Bell" title="Уведомления">
               <div className="divide-y divide-border">
                 <div className="px-4 py-3.5"><Toggle label="Push-уведомления" desc="Уведомления на устройстве" value={notif} onChange={() => setNotif(v => !v)} /></div>
-                <div className="px-4 py-3.5"><Toggle label="Звуки" desc="Звуковые сигналы при сообщениях" value={sounds} onChange={() => setSounds(v => !v)} /></div>
+                <div className="px-4 py-3.5"><Toggle label="Звуки" desc="Звуковые сигналы" value={sounds} onChange={() => setSounds(v => !v)} /></div>
               </div>
             </Card>
           )}
@@ -674,14 +827,12 @@ function SettingsPage({ user, token, onUpdate }: { user: User; token: string; on
 // ─── Profile ──────────────────────────────────────────────────────────────────
 
 function ProfilePage({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const initials = user.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const ini = initials(user.name);
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-lg mx-auto p-5">
         <div className="flex flex-col items-center py-6">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 border-2 border-primary/30 flex items-center justify-center text-xl font-bold text-primary mb-3">
-            {initials}
-          </div>
+          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary/40 to-primary/10 border-2 border-primary/30 flex items-center justify-center text-xl font-bold text-primary mb-3">{ini}</div>
           <h2 className="text-lg font-semibold">{user.name}</h2>
           {user.display_id && (
             <div className="flex items-center gap-1.5 mt-1.5">
@@ -690,14 +841,13 @@ function ProfilePage({ user, onLogout }: { user: User; onLogout: () => void }) {
             </div>
           )}
           <div className="flex items-center gap-1.5 mt-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400 pulse-dot" />
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
             <span className="text-xs text-muted-foreground">В сети</span>
           </div>
           <button className="mt-4 flex items-center gap-2 text-sm bg-secondary border border-border px-4 py-2 rounded-lg hover:bg-accent transition-colors">
             <Icon name="Edit2" size={13} />Редактировать
           </button>
         </div>
-
         <div className="space-y-3">
           <Card icon="User" title="Личные данные">
             <div className="divide-y divide-border">
@@ -714,7 +864,6 @@ function ProfilePage({ user, onLogout }: { user: User; onLogout: () => void }) {
               ))}
             </div>
           </Card>
-
           <Card icon="Key" title="Ключи шифрования">
             <div className="px-4 py-4 space-y-3">
               <div className="p-3 bg-secondary rounded-lg">
@@ -726,7 +875,6 @@ function ProfilePage({ user, onLogout }: { user: User; onLogout: () => void }) {
               </button>
             </div>
           </Card>
-
           <button onClick={onLogout} className="w-full flex items-center justify-center gap-2 text-sm text-destructive border border-destructive/20 bg-destructive/5 py-3 rounded-xl hover:bg-destructive/10 transition-colors">
             <Icon name="LogOut" size={14} />Выйти из аккаунта
           </button>
@@ -764,8 +912,6 @@ export default function App() {
   const handleLogout = () => { setUser(null); setToken(""); localStorage.removeItem("sf_token"); };
   const handleUpdate = (patch: Partial<User>) => setUser(p => p ? { ...p, ...patch } : p);
 
-  const totalUnread = MOCK_CHATS.reduce((a, c) => a + c.unread, 0);
-
   if (checking) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -798,7 +944,7 @@ export default function App() {
           </div>
         </div>
         <div className="flex-1 overflow-hidden">
-          {tab === "chats" && <ChatsPage />}
+          {tab === "chats" && <ChatsPage token={token} />}
           {tab === "contacts" && <ContactsPage />}
           {tab === "settings" && <SettingsPage user={user} token={token} onUpdate={handleUpdate} />}
           {tab === "profile" && <ProfilePage user={user} onLogout={handleLogout} />}
@@ -811,11 +957,6 @@ export default function App() {
             {tab === item.id && <span className="absolute inset-0 bg-primary/8 rounded-xl" />}
             <div className="relative">
               <Icon name={item.icon} size={19} />
-              {item.id === "chats" && totalUnread > 0 && (
-                <span className="absolute -top-1 -right-1.5 w-3.5 h-3.5 bg-primary rounded-full text-[9px] text-primary-foreground font-bold flex items-center justify-center">
-                  {totalUnread > 9 ? "9+" : totalUnread}
-                </span>
-              )}
             </div>
             <span className="text-[10px] font-medium relative">{item.label}</span>
           </button>
