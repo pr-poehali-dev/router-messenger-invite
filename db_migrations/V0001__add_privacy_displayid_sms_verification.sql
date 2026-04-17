@@ -1,0 +1,20 @@
+
+ALTER TABLE t_p2895926_router_messenger_inv.users
+  ADD COLUMN IF NOT EXISTS display_id VARCHAR(12) UNIQUE,
+  ADD COLUMN IF NOT EXISTS hide_phone BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS hide_last_seen BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS last_seen_visibility VARCHAR(20) NOT NULL DEFAULT 'everyone',
+  ADD COLUMN IF NOT EXISTS phone_visibility VARCHAR(20) NOT NULL DEFAULT 'everyone',
+  ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP;
+
+ALTER TABLE t_p2895926_router_messenger_inv.invite_codes
+  ALTER COLUMN code TYPE VARCHAR(32);
+
+CREATE TABLE IF NOT EXISTS t_p2895926_router_messenger_inv.phone_verifications (
+  id SERIAL PRIMARY KEY,
+  phone VARCHAR(20) NOT NULL,
+  code VARCHAR(6) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT NOW()
+);

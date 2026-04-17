@@ -10,7 +10,7 @@ def get_conn():
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
 
-def cors_headers():
+def cors():
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -18,7 +18,11 @@ def cors_headers():
     }
 
 
-def get_user_from_token(cur, token):
+def resp(status, data):
+    return {"statusCode": status, "headers": cors(), "body": json.dumps(data, ensure_ascii=False)}
+
+
+def get_user(cur, token):
     safe = token.replace("'", "")
     cur.execute(f"""
         SELECT u.id, u.name FROM {SCHEMA}.sessions s
@@ -28,62 +32,79 @@ def get_user_from_token(cur, token):
     return cur.fetchone()
 
 
+def gen_unique_code(cur):
+    for _ in range(20):
+        parts = [secrets.token_hex(4).upper() for _ in range(3)]
+        code = "SFERA-" + "-".join(parts)
+        cur.execute(f"SELECT 1 FROM {SCHEMA}.invite_codes WHERE code = '{code}'")
+        if not cur.fetchone():
+            return code
+    raise ValueError("Не удалось сгенерировать уникальный код")
+
+
 def handler(event: dict, context) -> dict:
-    """Управление инвайт-кодами: получить свои коды, сгенерировать новый."""
+    """Инвайт-коды: список, генерация нового, счётчик приглашённых."""
     if event.get("httpMethod") == "OPTIONS":
-        return {"statusCode": 200, "headers": cors_headers(), "body": ""}
+        return {"statusCode": 200, "headers": cors(), "body": ""}
 
     method = event.get("httpMethod", "GET")
     headers = event.get("headers") or {}
-    session_token = headers.get("x-session-token") or headers.get("X-Session-Token")
+    token = headers.get("x-session-token") or headers.get("X-Session-Token") or ""
 
-    if not session_token:
-        return {"statusCode": 401, "headers": cors_headers(), "body": json.dumps({"error": "Не авторизован"})}
+    if not token:
+        return resp(401, {"error": "Не авторизован"})
 
     conn = get_conn()
     cur = conn.cursor()
 
     try:
-        user = get_user_from_token(cur, session_token)
+        user = get_user(cur, token)
         if not user:
-            return {"statusCode": 401, "headers": cors_headers(), "body": json.dumps({"error": "Сессия не найдена"})}
+            return resp(401, {"error": "Сессия не найдена"})
 
         user_id = user[0]
 
-        # GET /invites - list user's invite codes
+        # GET — список кодов + счётчик приглашённых
         if method == "GET":
             cur.execute(f"""
                 SELECT ic.code, ic.is_used, ic.created_at, ic.used_at,
-                       u.name as used_by_name
+                       u.name AS used_by_name, u.display_id AS used_by_display_id
                 FROM {SCHEMA}.invite_codes ic
                 LEFT JOIN {SCHEMA}.users u ON u.id = ic.used_by_user_id
                 WHERE ic.owner_user_id = {user_id}
                 ORDER BY ic.created_at DESC
             """)
             rows = cur.fetchall()
-            codes = []
-            for row in rows:
-                codes.append({
-                    "code": row[0],
-                    "is_used": row[1],
-                    "created_at": row[2].isoformat() if row[2] else None,
-                    "used_at": row[3].isoformat() if row[3] else None,
-                    "used_by": row[4],
-                })
-            return {"statusCode": 200, "headers": cors_headers(), "body": json.dumps({"codes": codes})}
 
-        # POST /invites - generate a new invite code (on each login a fresh code is created)
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {SCHEMA}.invite_codes
+                WHERE owner_user_id = {user_id} AND is_used = TRUE
+            """)
+            invited_count = cur.fetchone()[0]
+
+            codes = [{
+                "code": r[0],
+                "is_used": r[1],
+                "created_at": r[2].isoformat() if r[2] else None,
+                "used_at": r[3].isoformat() if r[3] else None,
+                "used_by": r[4],
+                "used_by_display_id": r[5],
+            } for r in rows]
+
+            return resp(200, {"codes": codes, "invited_count": invited_count})
+
+        # POST — сгенерировать новый код
         if method == "POST":
-            code = "SF-" + secrets.token_hex(4).upper()
+            code = gen_unique_code(cur)
             cur.execute(f"INSERT INTO {SCHEMA}.invite_codes (code, owner_user_id) VALUES ('{code}', {user_id})")
             conn.commit()
-            return {"statusCode": 200, "headers": cors_headers(), "body": json.dumps({"code": code})}
+            return resp(200, {"code": code})
 
-        return {"statusCode": 404, "headers": cors_headers(), "body": json.dumps({"error": "Not found"})}
+        return resp(404, {"error": "Not found"})
 
     except Exception as e:
         conn.rollback()
-        return {"statusCode": 500, "headers": cors_headers(), "body": json.dumps({"error": str(e)})}
+        return resp(500, {"error": str(e)})
     finally:
         cur.close()
         conn.close()
