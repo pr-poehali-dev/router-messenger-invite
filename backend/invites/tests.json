@@ -1,0 +1,11 @@
+{
+  "tests": [
+    {
+      "name": "Get invites - no auth",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    }
+  ]
+}
